@@ -7,7 +7,7 @@ ENV/
 .env
 
 # Vector DB storage (Generated locally)
-chromadb_store/
+#chromadb_store/
 
 # Python Cache
 __pycache__/
