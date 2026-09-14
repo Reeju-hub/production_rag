@@ -1,0 +1,18 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Secrets & Keys (NEVER PUSH TO GITHUB)
+.env
+
+# Vector DB storage (Generated locally)
+chromadb_store/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Streamlit config
+.streamlit/
