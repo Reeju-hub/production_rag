@@ -1,0 +1,24 @@
+# SOC 2 and GDPR Compliance Operations Manual
+Version: 2026.4
+Last Updated: September 10, 2026
+Author: Globex Compliance & Risk Team
+
+## 1. Regulatory Scope and Applicability
+The General Data Protection Regulation (GDPR) is a binding legal regulation enacted by the European Union. It applies globally to any organization that processes the personal data of EU residents. Non-compliance can result in fines of up to 4% of annual global turnover or €20 million, whichever is higher. 
+In contrast, SOC 2 is a voluntary cybersecurity and data privacy framework developed by the American Institute of Certified Public Accountants (AICPA). It evaluates how service organizations manage customer data across five Trust Services Criteria: Security, Availability, Processing Integrity, Confidentiality, and Privacy. Globex Corporation currently maintains SOC 2 Type II compliance and undergoes independent audits annually in November.
+
+## 2. Incident Response and Breach Notification
+Both frameworks require organizations to respond systematically to security incidents, but the timelines differ significantly. GDPR mandates that a supervisory authority must be notified of a data breach within exactly 72 hours of the organization becoming aware of it. 
+For SOC 2, while there is no statutory 72-hour deadline, Globex internal policy requires that the Chief Information Security Officer (CISO) and the affected enterprise clients be notified within 48 hours of a confirmed Severity 1 (Critical) data exposure. All incident logs must be preserved in immutable AWS S3 buckets for a minimum of 365 days to satisfy auditor evidence requirements.
+
+## 3. Vendor and Third-Party Risk Management (TPRM)
+Managing third-party risk is a shared requirement across both frameworks. Under GDPR, data processors must be vetted and contractually bound via a Data Processing Agreement (DPA) before any EU personal data is transferred. 
+For SOC 2 compliance, Globex requires all Tier-1 vendors (those handling core customer data, such as AWS, Snowflake, and Stripe) to provide their own SOC 2 Type II reports annually. If a vendor fails to produce an updated report within 30 days of the expiration date, engineering teams must immediately revoke the vendor's API access tokens.
+
+## 4. User Rights and Data Erasure
+GDPR gives individuals enforceable rights over their data, including the "Right to be Forgotten" (data erasure). If a user requests deletion via the privacy portal, the automated deletion pipeline must purge all personal identifiable information (PII) across active databases within 30 days. 
+However, there is an exception: transaction records required for tax and financial compliance must be retained for 7 years, but this data must be fully anonymized. SOC 2 focuses on how data is secured and processed, but does not grant specific legal rights like data erasure to end-users.
+
+## 5. Access Control and Encryption Standards
+To satisfy SOC 2 Security Criteria and GDPR Privacy by Design, all databases containing PII must be encrypted at rest using AES-256 encryption. Data in transit must be encrypted using TLS 1.3 or higher; older protocols like TLS 1.1 are strictly prohibited on production load balancers.
+Access to production environments requires Multi-Factor Authentication (MFA) via a hardware security key (e.g., YubiKey). SMS-based MFA is no longer permitted for engineering staff. Passwords for internal service accounts must be rotated every 90 days, managed exclusively through HashiCorp Vault.
