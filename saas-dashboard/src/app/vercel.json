@@ -1,0 +1,19 @@
+{
+  "services": {
+    "app": {
+      "root": ".",
+      "framework": "fastapi"
+    },
+    "saas-dashboard": {
+      "root": "saas-dashboard",
+      "framework": "nextjs",
+      "bindings": [
+        { "type": "service", "service": "app", "format": "url", "env": "BACKEND_URL" }
+      ]
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "app" } },
+    { "source": "/(.*)", "destination": { "service": "saas-dashboard" } }
+  ]
+}
