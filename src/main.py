@@ -5,8 +5,8 @@ import uvicorn
 from dotenv import load_dotenv
 
 # 🔥 Tumhare FastAPI wale slack_bot se seedha app import kar rahe hain
-from slack_bot import app
-import ingest_01
+from src.slack_bot import app
+import src.ingest_01
 
 load_dotenv()
 
