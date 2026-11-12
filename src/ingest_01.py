@@ -7,7 +7,7 @@ import tiktoken
 import requests
 from io import BytesIO
 from PIL import Image
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
