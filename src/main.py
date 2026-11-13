@@ -2,6 +2,7 @@ import os
 import time
 from fastapi import Request, BackgroundTasks, HTTPException
 from fastapi.responses import RedirectResponse
+from supabase import create_client, Client
 import uvicorn
 import httpx
 from dotenv import load_dotenv
@@ -26,6 +27,27 @@ def run_sync_task():
     except Exception as e:
         print(f"❌ Error during background sync: {e}")
 
+# 👇 NAYA: Slack par notification bhejne ka function 👇
+async def send_slack_notification(access_token: str):
+    print("🚀 Sending notification to Slack...")
+    async with httpx.AsyncClient() as client:
+        # Slack API ko bot token bhejna zaroori hai
+        headers = {"Authorization": f"Bearer {access_token}"}
+        payload = {
+            "channel": "#general",  # Abhi test karne ke liye default channel #general hai
+            "text": "🚨 *Google Drive Update:* Ek naya document update hua hai aur background mein Pinecone vector DB mein sync ho raha hai! 🔄"
+        }
+        response = await client.post(
+            "https://slack.com/api/chat.postMessage", 
+            headers=headers, 
+            json=payload
+        )
+        data = response.json()
+        if data.get("ok"):
+            print("✅ Slack par message successfully chala gaya!")
+        else:
+            print(f"❌ Slack message error: {data.get('error')}")
+
 @app.post("/webhook/google-docs")
 async def google_drive_webhook(request: Request, background_tasks: BackgroundTasks):
     global last_sync_time
@@ -36,13 +58,36 @@ async def google_drive_webhook(request: Request, background_tasks: BackgroundTas
         print(f"💤 IGNORING PING: Document sync currently in cooldown.")
         return {"status": "ignored", "message": "Cooldown active"}
         
-    print("🚨 GOOGLE DRIVE PING: Valid document update detected! Scheduling sync...")
+    print("🚨 GOOGLE DRIVE PING: Valid document update detected! Fetching token from Supabase...")
     last_sync_time = current_time 
     
-    background_tasks.add_task(run_sync_task)
-    return {"status": "success", "message": "Pinecone sync scheduled in background!"}
+    # 1. Supabase se token nikalna
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+    
+    if supabase_url and supabase_key:
+        try:
+            supabase: Client = create_client(supabase_url, supabase_key)
+            # Table se token uthao (abhi test ke liye hum pehli entry utha rahe hain)
+            db_response = supabase.table("slack_installations").select("access_token").limit(1).execute()
+            
+            if db_response.data and len(db_response.data) > 0:
+                bot_token = db_response.data[0]["access_token"]
+                
+                # 2. Token milne par Background mein Slack message aur Pinecone sync chala do
+                background_tasks.add_task(send_slack_notification, bot_token)
+                background_tasks.add_task(run_sync_task)
+            else:
+                print("⚠️ Supabase mein koi Slack token nahi mila!")
+                
+        except Exception as e:
+            print(f"❌ Supabase fetch error: {e}")
+    else:
+        print("⚠️ Supabase credentials render environment mein nahi mile!")
 
-# 👇 NAYA SLACK OAUTH CALLBACK ROUTE 👇
+    return {"status": "success", "message": "Webhook processed, notification sent!"}
+
+# 👇 SLACK OAUTH CALLBACK ROUTE 👇
 @app.get("/api/auth/slack/callback")
 async def slack_oauth_callback(code: str):
     client_id = os.getenv("SLACK_CLIENT_ID")
@@ -65,7 +110,7 @@ async def slack_oauth_callback(code: str):
                 "client_id": client_id,
                 "client_secret": client_secret,
                 "code": code,
-                "redirect_uri": redirect_uri  # 🔥 YAHAN ADD KIYA HAI REDIRECT_URI
+                "redirect_uri": redirect_uri  
             }
         )
         data = response.json()
@@ -74,15 +119,33 @@ async def slack_oauth_callback(code: str):
         raise HTTPException(status_code=400, detail=f"Slack OAuth Error: {data.get('error')}")
 
     team_id = data.get("team", {}).get("id")
+    team_name = data.get("team", {}).get("name")
     access_token = data.get("access_token")
     
-    print(f"✅ Successfully installed in workspace: {team_id}")
+    print(f"✅ Successfully installed in workspace: {team_name} ({team_id})")
     
-    # TODO: Yahan Supabase mein team_id aur access_token save karne ka code aayega
+    # --- YAHAN SE SUPABASE KA NAYA CODE SHURU ---
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
     
+    if supabase_url and supabase_key:
+        try:
+            supabase: Client = create_client(supabase_url, supabase_key)
+            # upsert ka matlab: agar team pehle se hai toh update, warna naya insert
+            supabase.table("slack_installations").upsert({
+                "team_id": team_id,
+                "team_name": team_name,
+                "access_token": access_token
+            }).execute()
+            print("✅ Token saved to Supabase successfully!")
+        except Exception as e:
+            print(f"❌ Supabase DB error: {e}")
+    else:
+        print("⚠️ Supabase credentials Render environment mein nahi mile!")
+    # --- SUPABASE CODE KHATAM ---
+
     # Install hone ke baad user ko wapas Vercel landing page par bhej do
     return RedirectResponse(url=f"{frontend_url}/?install=success")
-# 👆 NAYA CODE YAHAN KHATAM 👆
 
 @app.get("/")
 def health_check():
