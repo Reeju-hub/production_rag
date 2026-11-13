@@ -2,23 +2,25 @@
 processed_images_cache = {}
 import os
 import re
+import json
 import time
 import tiktoken
 import requests
 from io import BytesIO
 from PIL import Image
-# from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import google.generativeai as genai 
-
+from google import genai
 # 🔥 Pinecone Cloud Database import
 from pinecone import Pinecone, ServerlessSpec 
 
 load_dotenv()
 
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
 
 print("⏳ Loading AI Model into Memory (Ek baar time lagega, fir superfast chalega)...")
 model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -57,14 +59,25 @@ def get_image_description(image_url):
 def get_google_doc_text(doc_id, process_images=True):
     """Google Doc se Text aur Images nikalna"""
     SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
-    SERVICE_ACCOUNT_FILE = 'credentials.json'
     
-    creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    # 🔥 Naya Logic: Environment Variable se securely padhna
+    google_creds_string = os.environ.get("GOOGLE_CREDENTIALS")
+    
+    if google_creds_string:
+        # Agar Render par live chal raha hai (Secret read karega)
+        creds_info = json.loads(google_creds_string)
+        creds = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    else:
+        # Agar tumhare laptop par local chal raha hai
+        SERVICE_ACCOUNT_FILE = 'tumhari_nayi_json_file_ka_naam.json' # Yahan local file ka naam rakh sakte ho
+        creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        
     service = build('docs', 'v1', credentials=creds)
     document = service.documents().get(documentId=doc_id).execute()
     
     inline_objects = document.get('inlineObjects', {})
     text = ""
+    # ... iske neeche ka saara code same rahega
     for element in document.get('body').get('content'):
         if 'paragraph' in element:
             para = element.get('paragraph')
