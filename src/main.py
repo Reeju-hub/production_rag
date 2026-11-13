@@ -35,7 +35,7 @@ async def send_slack_notification(access_token: str):
         headers = {"Authorization": f"Bearer {access_token}"}
         payload = {
             "channel": "C0C4BC2FN20",  # Abhi test karne ke liye default channel #general hai
-            "text": "🚨 *Google Drive Update:* Ek naya document update hua hai aur background mein Pinecone vector DB mein sync ho raha hai! 🔄"
+            "text": "🚨 *Google Drive Update:* New document updated aur background  Pinecone vector DB is syncing! 🔄"
         }
         response = await client.post(
             "https://slack.com/api/chat.postMessage", 
