@@ -5,7 +5,7 @@ ENV/
 
 # Secrets & Keys (NEVER PUSH TO GITHUB)
 .env
-
+*.json
 
 credentials.json
 
