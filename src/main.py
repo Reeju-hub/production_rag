@@ -47,7 +47,12 @@ async def google_drive_webhook(request: Request, background_tasks: BackgroundTas
 async def slack_oauth_callback(code: str):
     client_id = os.getenv("SLACK_CLIENT_ID")
     client_secret = os.getenv("SLACK_CLIENT_SECRET")
-    frontend_url = os.getenv("FRONTEND_URL", "https://tumhara-frontend.vercel.app") 
+    
+    # 🔥 UPDATE: Tumhara asli Vercel URL yahan daal diya
+    frontend_url = os.getenv("FRONTEND_URL", "https://productionrag-phi.vercel.app") 
+    
+    # 🔥 UPDATE: Slack ko wapas bhejne ke liye exact Render URL
+    redirect_uri = "https://production-rag-9u5w.onrender.com/api/auth/slack/callback"
     
     if not code:
         raise HTTPException(status_code=400, detail="Slack se authorization code nahi mila.")
@@ -59,7 +64,8 @@ async def slack_oauth_callback(code: str):
             data={
                 "client_id": client_id,
                 "client_secret": client_secret,
-                "code": code
+                "code": code,
+                "redirect_uri": redirect_uri  # 🔥 YAHAN ADD KIYA HAI REDIRECT_URI
             }
         )
         data = response.json()
