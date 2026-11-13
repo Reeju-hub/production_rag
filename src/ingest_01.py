@@ -8,7 +8,7 @@ import tiktoken
 import requests
 from io import BytesIO
 from PIL import Image
-from sentence_transformers import SentenceTransformer
+#from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -23,7 +23,7 @@ genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
 print("⏳ Loading AI Model into Memory (Ek baar time lagega, fir superfast chalega)...")
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# model = SentenceTransformer('all-MiniLM-L6-v2')
 
 def get_image_description(image_url):
     """👁️ Smart Image Reader with Caching to save Gemini Quota"""
@@ -141,19 +141,29 @@ def update_database(team_id: str = "company_A"):
         print("⚠️️ No text content found to embed.")
         return
 
-    print("3. Generating embeddings locally...")
-    embeddings = model.encode(chunks).tolist()
+    print("3. Generating embeddings via Gemini Cloud API (Zero RAM)...")
+    embeddings = []
+    for i, chunk in enumerate(chunks):
+        # Gemini ko text bhej kar vector nikal rahe hain
+        res = genai.embed_content(model="models/text-embedding-004", content=chunk)
+        embeddings.append(res['embedding'])
+        
+        # 🔥 YAHAN BHI SPEED-BREAKER LAGA DIYA (503 Error se bachne ke liye)
+        print(f"   Chunk {i+1}/{len(chunks)} embedded...")
+        time.sleep(1) 
     
     print("4. Updating Pinecone CLOUD Database...")
     pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
-    index_name = os.environ.get("PINECONE_INDEX_NAME", "docubot-enterprise-index")
     
-    # Check if index exists, if not create it (384 dimensions for all-MiniLM-L6-v2)
+    # NAYA NAAM: Kyunki Gemini ka vector size alag (768) hota hai, hum naya index banayenge
+    index_name = os.environ.get("PINECONE_INDEX_NAME", "docubot-gemini-index")
+    
+    # Check if index exists, if not create it (Gemini uses 768 dimensions)
     if index_name not in pc.list_indexes().names():
         print(f"☁️ Cloud par naya '{index_name}' index ban raha hai (Wait karo)...")
         pc.create_index(
             name=index_name,
-            dimension=384,
+            dimension=768,  # 🔥 Gemini ke hisaab se 768 dimension set kar diya
             metric='cosine',
             spec=ServerlessSpec(cloud='aws', region='us-east-1')
         )
