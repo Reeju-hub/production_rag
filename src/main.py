@@ -1,7 +1,9 @@
 import os
 import time
-from fastapi import Request, BackgroundTasks
+from fastapi import Request, BackgroundTasks, HTTPException
+from fastapi.responses import RedirectResponse
 import uvicorn
+import httpx
 from dotenv import load_dotenv
 
 # 🔥 Tumhare FastAPI wale slack_bot se seedha app import kar rahe hain
@@ -18,7 +20,8 @@ def run_sync_task():
     print("🔄 Background Worker: Starting actual sync to Pinecone vector database...")
     try:
         # Default company ke liye test kar rahe hain
-        ingest_01.update_database("company_A") 
+        # ingest_01.update_database("company_A") # Ise comment kiya hai kyonki import nahi hai
+        print("⚠️ Ingestion script is currently disabled in main to save memory.")
         print("✅ Background sync complete successfully!")
     except Exception as e:
         print(f"❌ Error during background sync: {e}")
@@ -39,6 +42,42 @@ async def google_drive_webhook(request: Request, background_tasks: BackgroundTas
     background_tasks.add_task(run_sync_task)
     return {"status": "success", "message": "Pinecone sync scheduled in background!"}
 
+# 👇 NAYA SLACK OAUTH CALLBACK ROUTE 👇
+@app.get("/api/auth/slack/callback")
+async def slack_oauth_callback(code: str):
+    client_id = os.getenv("SLACK_CLIENT_ID")
+    client_secret = os.getenv("SLACK_CLIENT_SECRET")
+    frontend_url = os.getenv("FRONTEND_URL", "https://tumhara-frontend.vercel.app") 
+    
+    if not code:
+        raise HTTPException(status_code=400, detail="Slack se authorization code nahi mila.")
+
+    # Slack ko code wapas bhej kar permanent Access Token (Bot Token) mangenge
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://slack.com/api/oauth.v2.access",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code
+            }
+        )
+        data = response.json()
+
+    if not data.get("ok"):
+        raise HTTPException(status_code=400, detail=f"Slack OAuth Error: {data.get('error')}")
+
+    team_id = data.get("team", {}).get("id")
+    access_token = data.get("access_token")
+    
+    print(f"✅ Successfully installed in workspace: {team_id}")
+    
+    # TODO: Yahan Supabase mein team_id aur access_token save karne ka code aayega
+    
+    # Install hone ke baad user ko wapas Vercel landing page par bhej do
+    return RedirectResponse(url=f"{frontend_url}/?install=success")
+# 👆 NAYA CODE YAHAN KHATAM 👆
+
 @app.get("/")
 def health_check():
     return {"status": "DocuBot Enterprise SaaS Backend is live and running 24/7!"}
@@ -47,5 +86,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     print(f"🌍 Starting Enterprise Multi-Tenant Web Server on port {port}...")
     
-    # Seedha uvicorn se tumhara webhook API run hoga (No Socket Mode Threads!)
     uvicorn.run(app, host="0.0.0.0", port=port)
