@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import google.generativeai as genai 
-from google import genai
+#from google import genai
 # 🔥 Pinecone Cloud Database import
 from pinecone import Pinecone, ServerlessSpec 
 

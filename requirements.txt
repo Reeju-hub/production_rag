@@ -3,7 +3,7 @@ uvicorn
 slack_bolt
 supabase
 pinecone
-google-genai
+
 google-generativeai
 python-dotenv
 tiktoken
