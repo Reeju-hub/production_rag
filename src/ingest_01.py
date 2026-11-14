@@ -18,7 +18,7 @@ from google import genai
 
 load_dotenv()
 
-# 🔥 NAYA SDK INITIALIZATION (Standard API)
+# 🔥 STANDARD API (No v1beta)
 gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 section_memory_file = "section_hashes.json"
 
@@ -35,9 +35,9 @@ def get_image_description(image_url):
             
         img = Image.open(BytesIO(response.content))
         
-        # 🔥 GLOBALLY SUPPORTED VISION MODEL
+        # 🔥 LATEST VISION MODEL
         res = gemini_client.models.generate_content(
-            model='gemini-pro-vision',
+            model='gemini-1.5-flash',
             contents=["Describe what is strictly inside this image in detail. Maximum 2 lines. Answer in English.", img]
         )
         description = res.text.strip()
@@ -165,9 +165,9 @@ def update_database(team_id: str = "company_A"):
     print("3. Generating embeddings via Gemini Cloud API (Zero RAM)...")
     embeddings = []
     for i, chunk in enumerate(all_chunks):
-        # 🔥 GLOBALLY SUPPORTED EMBEDDING MODEL
+        # 🔥 LATEST EMBEDDING MODEL
         res = gemini_client.models.embed_content(
-            model="embedding-001", 
+            model="text-embedding-004", 
             contents=chunk
         )
         embeddings.append(res.embeddings[0].values)
