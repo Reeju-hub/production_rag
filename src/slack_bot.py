@@ -23,11 +23,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
-# 🔥 SDK INITIALIZATION (Forced to v1beta)
-gemini_client = genai.Client(
-    api_key=GEMINI_API_KEY,
-    http_options={'api_version': 'v1beta'}
-)
+
+# 🔥 NAYA SDK INITIALIZATION (Standard API)
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-gemini-index")
 user_memory = {}
@@ -84,9 +82,9 @@ async def slack_events(payload: SlackEventPayload):
             try:
                 index = pc.Index(INDEX_NAME)
                 
-                # 🔥 NAYA VECTOR SEARCH SYNTAX
+                # 🔥 GLOBALLY SUPPORTED EMBEDDING MODEL
                 embed_response = gemini_client.models.embed_content(
-                    model="text-embedding-004",
+                    model="embedding-001",
                     contents=user_question
                 )
                 query_vector = embed_response.embeddings[0].values
@@ -111,9 +109,9 @@ Context:
 User Query: {user_question}
 Answer:"""
 
-                # 🔥 NAYA ANSWER GENERATION SYNTAX
+                # 🔥 GLOBALLY SUPPORTED CHAT MODEL
                 ai_response = gemini_client.models.generate_content(
-                    model="gemini-1.5-flash",
+                    model="gemini-pro",
                     contents=prompt
                 )
                 final_answer = ai_response.text
