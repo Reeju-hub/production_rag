@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from pathlib import Path
 from supabase import create_client
 from pinecone import Pinecone
-#from google import genai
 import google.generativeai as genai
 import httpx
 
@@ -26,9 +25,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
-INDEX_NAME = "docubot-enterprise-index"
+# Dhyan rakhna, yeh wahi index naam ho jo ingest_01.py mein (768 dimension ke sath) bana hai
+INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-gemini-index")
 user_memory = {}
 
 class SlackEventPayload(BaseModel):
@@ -87,11 +87,13 @@ async def slack_events(payload: SlackEventPayload):
             try:
                 # 4. Perform Vector Search inside Isolated Pinecone Namespace
                 index = pc.Index(INDEX_NAME)
-                embed_response = gemini_client.models.embed_content(
-                    model="models/gemini-embedding-001",
-                    contents=user_question
+                
+                # 🔥 FIX 1: Purane syntax se embedding nikalna
+                embed_response = genai.embed_content(
+                    model="models/text-embedding-004",
+                    content=user_question
                 )
-                query_vector = embed_response.embeddings[0].values
+                query_vector = embed_response['embedding']
 
                 namespace = f"workspace_{team_id}"
                 search_results = index.query(
@@ -114,10 +116,9 @@ Context:
 User Query: {user_question}
 Answer:"""
 
-                ai_response = gemini_client.models.generate_content(
-                    model="gemini-3.8-flash",
-                    contents=prompt
-                )
+                # 🔥 FIX 2: Purane syntax se AI ka answer nikalna
+                vision_model = genai.GenerativeModel('gemini-1.5-flash')
+                ai_response = vision_model.generate_content(prompt)
                 final_answer = ai_response.text
 
                 citation_url = os.environ.get("GOOGLE_DOC_URL", "https://docs.google.com")
