@@ -89,10 +89,7 @@ async def slack_events(payload: SlackEventPayload):
                 index = pc.Index(INDEX_NAME)
                 
                 # 🔥 FIX 1: Purane syntax se embedding nikalna
-                embed_response = genai.embed_content(
-                    model="models/text-embedding-001",
-                    content=user_question
-                )
+                embed_response = genai.embed_content(model="models/text-embedding-004", content=user_question)
                 query_vector = embed_response['embedding']
 
                 namespace = f"workspace_{team_id}"
@@ -117,7 +114,7 @@ User Query: {user_question}
 Answer:"""
 
                 # 🔥 FIX 2: Purane syntax se AI ka answer nikalna
-                vision_model = genai.GenerativeModel('gemini-1.5-flash')
+                vision_model = genai.GenerativeModel('gemini-1.5-flash-latest')
                 ai_response = vision_model.generate_content(prompt)
                 final_answer = ai_response.text
 

@@ -35,7 +35,7 @@ def get_image_description(image_url):
             return f"Image download failed with status {response.status_code}"
             
         img = Image.open(BytesIO(response.content))
-        vision_model = genai.GenerativeModel('gemini-1.5-flash')
+        vision_model = genai.GenerativeModel('gemini-1.5-flash-latest')
         res = vision_model.generate_content([
             "Describe what is strictly inside this image in detail. Maximum 2 lines. Answer in English.", 
             img
@@ -177,10 +177,10 @@ def update_database(team_id: str = "company_A"):
     print("3. Generating embeddings via Gemini Cloud API (Zero RAM)...")
     embeddings = []
     for i, chunk in enumerate(all_chunks):
-        res = genai.embed_content(model="models/embedding-001", content=chunk)
+        res = genai.embed_content(model="models/text-embedding-004", content=chunk)
         embeddings.append(res['embedding'])
         print(f"   Chunk {i+1}/{len(all_chunks)} embedded...")
-        time.sleep(1) 
+        time.sleep(1)
     
     print("4. Updating Pinecone CLOUD Database...")
     pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
