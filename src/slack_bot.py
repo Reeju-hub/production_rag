@@ -6,7 +6,8 @@ from pydantic import BaseModel
 from pathlib import Path
 from supabase import create_client
 from pinecone import Pinecone
-from google import genai
+#from google import genai
+import google.generativeai as genai
 import httpx
 
 load_dotenv()
