@@ -6,14 +6,12 @@ from pydantic import BaseModel
 from pathlib import Path
 from supabase import create_client
 from pinecone import Pinecone
-import google.generativeai as genai
+from google import genai
 import httpx
 
 load_dotenv()
 env_path = Path(__file__).resolve().parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
 
 app = FastAPI(title="DocuBot.ai Enterprise Multi-Tenant Backend")
 
@@ -25,9 +23,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
-genai.configure(api_key=GEMINI_API_KEY)
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Dhyan rakhna, yeh wahi index naam ho jo ingest_01.py mein (768 dimension ke sath) bana hai
 INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-gemini-index")
 user_memory = {}
 
@@ -40,7 +37,6 @@ class SlackEventPayload(BaseModel):
 
 @app.post("/api/slack/events")
 async def slack_events(payload: SlackEventPayload):
-    # 1. Handle Slack URL Verification Challenge
     if payload.type == "url_verification":
         return {"challenge": payload.challenge}
 
@@ -48,7 +44,6 @@ async def slack_events(payload: SlackEventPayload):
     if not event:
         return {"status": "ignored"}
 
-    # 2. Process App Mentions (@DocuBot)
     if event.get("type") == "app_mention":
         team_id = payload.team_id
         channel_id = event.get("channel")
@@ -59,7 +54,6 @@ async def slack_events(payload: SlackEventPayload):
         if not user_question:
             return {"status": "empty_query"}
 
-        # 3. Fetch Company Bot Token from Supabase dynamically
         db_response = supabase.table("slack_installations").select("access_token").eq("team_id", team_id).execute()
         
         if not db_response.data or len(db_response.data) == 0:
@@ -69,7 +63,6 @@ async def slack_events(payload: SlackEventPayload):
         history = user_memory.get(user_id, [])
 
         async with httpx.AsyncClient() as client:
-            # Send initial searching message
             init_res = await client.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {bot_access_token}"},
@@ -85,12 +78,14 @@ async def slack_events(payload: SlackEventPayload):
             message_ts = init_data["ts"]
 
             try:
-                # 4. Perform Vector Search inside Isolated Pinecone Namespace
                 index = pc.Index(INDEX_NAME)
                 
-                # 🔥 FIX 1: Purane syntax se embedding nikalna
-                embed_response = genai.embed_content(model="models/text-embedding-004", content=user_question)
-                query_vector = embed_response['embedding']
+                # 🔥 NAYA VECTOR SEARCH SYNTAX
+                embed_response = gemini_client.models.embed_content(
+                    model="text-embedding-004",
+                    contents=user_question
+                )
+                query_vector = embed_response.embeddings[0].values
 
                 namespace = f"workspace_{team_id}"
                 search_results = index.query(
@@ -104,7 +99,6 @@ async def slack_events(payload: SlackEventPayload):
                 if not context_text:
                     context_text = "No relevant enterprise documents found in your synchronized Google Drive repository."
 
-                # 5. Generate Answer using Gemini Model
                 prompt = f"""You are DocuBot.ai, an elite enterprise AI assistant. Use the following context retrieved from the company's secure Google Docs to answer the user query accurately.
 
 Context:
@@ -113,14 +107,15 @@ Context:
 User Query: {user_question}
 Answer:"""
 
-                # 🔥 FIX 2: Purane syntax se AI ka answer nikalna
-                vision_model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                ai_response = vision_model.generate_content(prompt)
+                # 🔥 NAYA ANSWER GENERATION SYNTAX
+                ai_response = gemini_client.models.generate_content(
+                    model="gemini-1.5-flash",
+                    contents=prompt
+                )
                 final_answer = ai_response.text
 
                 citation_url = os.environ.get("GOOGLE_DOC_URL", "https://docs.google.com")
 
-                # 6. Update message with Answer & Interactive Feedback Buttons
                 await client.post(
                     "https://slack.com/api/chat.update",
                     headers={"Authorization": f"Bearer {bot_access_token}"},
@@ -161,7 +156,6 @@ Answer:"""
                     }
                 )
 
-                # Update memory
                 history.append((user_question, final_answer))
                 if len(history) > 3:
                     history.pop(0)
