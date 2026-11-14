@@ -24,8 +24,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# 🔥 STANDARD API (No v1beta)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+# 🔥 API VERSION V1BETA FOR LATEST MODELS
+gemini_client = genai.Client(
+    api_key=GEMINI_API_KEY,
+    http_options={'api_version': 'v1beta'}
+)
 
 INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-gemini-index")
 user_memory = {}

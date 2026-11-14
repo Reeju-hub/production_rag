@@ -18,8 +18,11 @@ from google import genai
 
 load_dotenv()
 
-# 🔥 STANDARD API (No v1beta)
-gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+# 🔥 API VERSION V1BETA FOR LATEST MODELS
+gemini_client = genai.Client(
+    api_key=os.environ.get("GEMINI_API_KEY"),
+    http_options={'api_version': 'v1beta'}
+)
 section_memory_file = "section_hashes.json"
 
 def get_image_description(image_url):
