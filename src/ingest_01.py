@@ -13,15 +13,15 @@ from PIL import Image
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from google import genai 
 from pinecone import Pinecone, ServerlessSpec 
+
+# 🔥 SIRF NAYA SDK IMPORT KARENGE
+from google import genai
 
 load_dotenv()
 
 # 🔥 NAYA SDK INITIALIZATION
 gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-
-# 🔥 MEMORY CACHE FILE: H2 sections ka data yaad rakhne ke liye
 section_memory_file = "section_hashes.json"
 
 def get_image_description(image_url):
@@ -37,7 +37,7 @@ def get_image_description(image_url):
             
         img = Image.open(BytesIO(response.content))
         
-        # 🔥 NAYA VISION SYNTAX
+        # 🔥 NAYA VISION SYNTAX - PERFECT
         res = gemini_client.models.generate_content(
             model='gemini-1.5-flash',
             contents=["Describe what is strictly inside this image in detail. Maximum 2 lines. Answer in English.", img]
@@ -167,11 +167,12 @@ def update_database(team_id: str = "company_A"):
     print("3. Generating embeddings via Gemini Cloud API (Zero RAM)...")
     embeddings = []
     for i, chunk in enumerate(all_chunks):
-        # 🔥 NAYA EMBEDDING SYNTAX
+        # 🔥 NAYA EMBEDDING SYNTAX - PERFECT
         res = gemini_client.models.embed_content(
             model="text-embedding-004", 
             contents=chunk
         )
+        # Naye SDK mein list ke form mein aate hain embeddings
         embeddings.append(res.embeddings[0].values)
         print(f"   Chunk {i+1}/{len(all_chunks)} embedded...")
         time.sleep(1) 
