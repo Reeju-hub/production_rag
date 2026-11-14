@@ -20,8 +20,11 @@ from google import genai
 
 load_dotenv()
 
-# 🔥 NAYA SDK INITIALIZATION
-gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+# 🔥 NAYA SDK INITIALIZATION (Forced to v1beta)
+gemini_client = genai.Client(
+    api_key=os.environ.get("GEMINI_API_KEY"),
+    http_options={'api_version': 'v1beta'}
+)
 section_memory_file = "section_hashes.json"
 
 def get_image_description(image_url):
