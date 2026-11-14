@@ -1,7 +1,7 @@
 import os
 import time
 from fastapi import Request, BackgroundTasks, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from supabase import create_client, Client
 import uvicorn
 import httpx
@@ -17,26 +17,25 @@ load_dotenv()
 last_sync_time = 0
 COOLDOWN_SECONDS = 30  
 
-def run_sync_task():
-    print("🔄 Background Worker: Starting actual sync to Pinecone vector database...")
-    try:
-        # Default company ke liye test kar rahe hain
-        # ingest_01.update_database("company_A") # Ise comment kiya hai kyonki import nahi hai
-        print("⚠️ Ingestion script is currently disabled in main to save memory.")
-        print("✅ Background sync complete successfully!")
-    except Exception as e:
-        print(f"❌ Error during background sync: {e}")
-
-# 👇 NAYA: Slack par notification bhejne ka function 👇
-async def send_slack_notification(access_token: str):
-    print("🚀 Sending notification to Slack...")
+# 👇 NAYA: Slack par updated sections ke sath message bhejne ka function 👇
+async def send_slack_notification(access_token: str, updated_sections: list):
+    print("🚀 Sending smart notification to Slack...")
     async with httpx.AsyncClient() as client:
-        # Slack API ko bot token bhejna zaroori hai
         headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # Agar list khali hai (koi changes pakad mein nahi aaye)
+        if not updated_sections:
+             text_message = "🚨 *Google Drive Sync Complete:* The document was scanned, but no new H2 section changes were detected. 🔄"
+        else:
+             # List ko naye lines mein jod kar message banao
+             sections_text = "\n".join(updated_sections)
+             text_message = f"🚨 *Google Drive Update Detected!*\nThe following sections were updated:\n\n{sections_text}\n\n✅ *Background Pinecone Sync Complete!*"
+             
         payload = {
-            "channel": "C0C4BC2FN20",  # Abhi test karne ke liye default channel #general hai
-            "text": "🚨 *Google Drive Update:* New document updated aur background  Pinecone vector DB is syncing! 🔄"
+            "channel": "C0C4BC2FN20",  # Abhi test karne ke liye default channel
+            "text": text_message
         }
+        
         response = await client.post(
             "https://slack.com/api/chat.postMessage", 
             headers=headers, 
@@ -44,9 +43,25 @@ async def send_slack_notification(access_token: str):
         )
         data = response.json()
         if data.get("ok"):
-            print("✅ Slack par message successfully chala gaya!")
+            print("✅ Slack par Smart Message successfully chala gaya!")
         else:
             print(f"❌ Slack message error: {data.get('error')}")
+
+# 👇 UPDATE: Ab yeh sync karega, updated list niklaega, aur uske baad notification bhejega 👇
+async def run_sync_and_notify(bot_token: str):
+    print("🔄 Background Worker: Starting actual sync to Pinecone vector database...")
+    try:
+        # H2 Updates wali list hume ingest_01 se yahan mil jayegi
+        updated_sections = src.ingest_01.update_database("company_A") 
+        
+        print("✅ Background sync complete successfully!")
+        
+        # Sync khatam hone ke baad ab message bhejenge
+        await send_slack_notification(bot_token, updated_sections)
+        
+    except Exception as e:
+        print(f"❌ Error during background sync: {e}")
+
 
 @app.post("/webhook/google-docs")
 async def google_drive_webhook(request: Request, background_tasks: BackgroundTasks):
@@ -68,15 +83,13 @@ async def google_drive_webhook(request: Request, background_tasks: BackgroundTas
     if supabase_url and supabase_key:
         try:
             supabase: Client = create_client(supabase_url, supabase_key)
-            # Table se token uthao (abhi test ke liye hum pehli entry utha rahe hain)
             db_response = supabase.table("slack_installations").select("access_token").limit(1).execute()
             
             if db_response.data and len(db_response.data) > 0:
                 bot_token = db_response.data[0]["access_token"]
                 
-                # 2. Token milne par Background mein Slack message aur Pinecone sync chala do
-                background_tasks.add_task(send_slack_notification, bot_token)
-                background_tasks.add_task(run_sync_task)
+                # 2. Token milne par Background mein sirf ek task chala do jo sync karke notify karega
+                background_tasks.add_task(run_sync_and_notify, bot_token)
             else:
                 print("⚠️ Supabase mein koi Slack token nahi mila!")
                 
@@ -85,14 +98,11 @@ async def google_drive_webhook(request: Request, background_tasks: BackgroundTas
     else:
         print("⚠️ Supabase credentials render environment mein nahi mile!")
 
-    return {"status": "success", "message": "Webhook processed, notification sent!"}
-
-from fastapi.responses import HTMLResponse
+    return {"status": "success", "message": "Webhook processed, background sync started!"}
 
 # DHYAN RAHE: "google123456789.html" ko apne asli file ke naam se replace karna
 @app.get("/google546e6a17c1bc90a2.html")
 def google_verification():
-    # Andar ka content bhi wahi daalna jo Notepad mein likha hai
     return HTMLResponse(content="google-site-verification: google546e6a17c1bc90a2.html")
 
 # 👇 SLACK OAUTH CALLBACK ROUTE 👇
@@ -100,17 +110,12 @@ def google_verification():
 async def slack_oauth_callback(code: str):
     client_id = os.getenv("SLACK_CLIENT_ID")
     client_secret = os.getenv("SLACK_CLIENT_SECRET")
-    
-    # 🔥 UPDATE: Tumhara asli Vercel URL yahan daal diya
     frontend_url = os.getenv("FRONTEND_URL", "https://productionrag-phi.vercel.app") 
-    
-    # 🔥 UPDATE: Slack ko wapas bhejne ke liye exact Render URL
     redirect_uri = "https://production-rag-9u5w.onrender.com/api/auth/slack/callback"
     
     if not code:
         raise HTTPException(status_code=400, detail="Slack se authorization code nahi mila.")
 
-    # Slack ko code wapas bhej kar permanent Access Token (Bot Token) mangenge
     async with httpx.AsyncClient() as client:
         response = await client.post(
             "https://slack.com/api/oauth.v2.access",
@@ -139,7 +144,6 @@ async def slack_oauth_callback(code: str):
     if supabase_url and supabase_key:
         try:
             supabase: Client = create_client(supabase_url, supabase_key)
-            # upsert ka matlab: agar team pehle se hai toh update, warna naya insert
             supabase.table("slack_installations").upsert({
                 "team_id": team_id,
                 "team_name": team_name,
@@ -152,7 +156,6 @@ async def slack_oauth_callback(code: str):
         print("⚠️ Supabase credentials Render environment mein nahi mile!")
     # --- SUPABASE CODE KHATAM ---
 
-    # Install hone ke baad user ko wapas Vercel landing page par bhej do
     return RedirectResponse(url=f"{frontend_url}/?install=success")
 
 @app.get("/")
@@ -162,5 +165,4 @@ def health_check():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     print(f"🌍 Starting Enterprise Multi-Tenant Web Server on port {port}...")
-    
     uvicorn.run(app, host="0.0.0.0", port=port)

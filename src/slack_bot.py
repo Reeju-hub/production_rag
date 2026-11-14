@@ -90,7 +90,7 @@ async def slack_events(payload: SlackEventPayload):
                 
                 # 🔥 FIX 1: Purane syntax se embedding nikalna
                 embed_response = genai.embed_content(
-                    model="models/text-embedding-004",
+                    model="models/text-embedding-001",
                     content=user_question
                 )
                 query_vector = embed_response['embedding']

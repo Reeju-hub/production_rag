@@ -1,87 +1,82 @@
-# 🧠 SMART CACHE: Ek baar jo image padh li, uska description yahan save ho jayega taaki quota bar-bar waste na ho
+# 🧠 SMART CACHE: Ek baar jo image padh li, uska description yahan save ho jayega
 processed_images_cache = {}
+
 import os
 import re
 import json
 import time
+import hashlib
 import tiktoken
 import requests
 from io import BytesIO
 from PIL import Image
-#from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import google.generativeai as genai 
-#from google import genai
-# 🔥 Pinecone Cloud Database import
 from pinecone import Pinecone, ServerlessSpec 
 
 load_dotenv()
-
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-
-print("⏳ Loading AI Model into Memory (Ek baar time lagega, fir superfast chalega)...")
-# model = SentenceTransformer('all-MiniLM-L6-v2')
+# 🔥 MEMORY CACHE FILE: H2 sections ka data yaad rakhne ke liye
+section_memory_file = "section_hashes.json"
 
 def get_image_description(image_url):
     """👁️ Smart Image Reader with Caching to save Gemini Quota"""
     if image_url in processed_images_cache:
-        print("⚡ Cache hit! Image pehle se read hai, Gemini ko call nahi kiya.")
+        print("⚡ Cache hit! Image pehle se read hai.")
         return processed_images_cache[image_url]
         
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(image_url, headers=headers, timeout=10)
-        
         if response.status_code != 200:
             return f"Image download failed with status {response.status_code}"
             
         img = Image.open(BytesIO(response.content))
-        vision_model = genai.GenerativeModel('gemini-flash-latest')
-        
+        vision_model = genai.GenerativeModel('gemini-1.5-flash')
         res = vision_model.generate_content([
-            "Describe what is strictly inside this image in detail (e.g., UI layout, artwork, text, or objects). Maximum 2 lines. Answer in English.", 
+            "Describe what is strictly inside this image in detail. Maximum 2 lines. Answer in English.", 
             img
         ])
-        
         description = res.text.strip()
         processed_images_cache[image_url] = description
         return description
         
     except Exception as e:
-        print(f"⚠️ Gemini Vision AI quota/error: {e}")
-        fallback_text = "Image description unavailable due to API rate limit."
+        print(f"⚠️ Gemini Vision AI error: {e}")
+        fallback_text = "Image description unavailable."
         processed_images_cache[image_url] = fallback_text
         return fallback_text
 
-def get_google_doc_text(doc_id, process_images=True):
-    """Google Doc se Text aur Images nikalna"""
+
+def get_google_doc_sections(doc_id, process_images=True):
+    """Google Doc ko padh kar H2 Headings aur Images ke hisaab se todna"""
     SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
-    
-    # 🔥 Naya Logic: Environment Variable se securely padhna
     google_creds_string = os.environ.get("GOOGLE_CREDENTIALS")
     
     if google_creds_string:
-        # Agar Render par live chal raha hai (Secret read karega)
         creds_info = json.loads(google_creds_string)
         creds = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
     else:
-        # Agar tumhare laptop par local chal raha hai
-        SERVICE_ACCOUNT_FILE = 'tumhari_nayi_json_file_ka_naam.json' # Yahan local file ka naam rakh sakte ho
-        creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+        creds = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
         
     service = build('docs', 'v1', credentials=creds)
     document = service.documents().get(documentId=doc_id).execute()
     
     inline_objects = document.get('inlineObjects', {})
-    text = ""
-    # ... iske neeche ka saara code same rahega
+    
+    sections = {}
+    current_h2 = "Introduction (Top Section)"
+    current_link = f"https://docs.google.com/document/d/{doc_id}/edit"
+    current_text = ""
+
     for element in document.get('body').get('content'):
         if 'paragraph' in element:
             para = element.get('paragraph')
             style = para.get('paragraphStyle', {}).get('namedStyleType', '')
+            heading_id = para.get('paragraphStyle', {}).get('headingId', '')
             
             line_text = ""
             for p_element in para.get('elements'):
@@ -100,13 +95,23 @@ def get_google_doc_text(doc_id, process_images=True):
                             else:
                                 line_text += f"\n[🖼️ IMAGE ID: {obj_id}]\n"
             
-            line_text = line_text.strip()
-            if line_text:
-                if style in ['HEADING_1', 'HEADING_2', 'HEADING_3']:
-                    text += f"\n\n## {line_text}\n"
-                else:
-                    text += f"{line_text}\n"
-    return text
+            # 🔥 SMART DETECTOR: H2 pehchan kar Naya Section aur Direct Link Banana
+            if style == 'HEADING_2' and line_text.strip():
+                if current_text.strip():
+                    sections[current_h2] = {"link": current_link, "text": current_text.strip()}
+                
+                current_h2 = line_text.strip()
+                current_link = f"https://docs.google.com/document/d/{doc_id}/edit#heading={heading_id}"
+                current_text = f"## {current_h2}\n"
+            else:
+                current_text += line_text
+                
+    # Aakhiri bacha hua section save karo
+    if current_text.strip():
+        sections[current_h2] = {"link": current_link, "text": current_text.strip()}
+        
+    return sections
+
 
 def smart_chunker(text: str, max_tokens: int = 300) -> list[str]:
     encoder = tiktoken.encoding_for_model("text-embedding-3-small")
@@ -123,71 +128,86 @@ def smart_chunker(text: str, max_tokens: int = 300) -> list[str]:
         chunks.append(current_chunk.strip())
     return chunks
 
-# 🔥 MULTI-TENANT UPDATE: Ab yeh function kisi bhi specific team_id ke liye sync karega
+
 def update_database(team_id: str = "company_A"):
-    print(f"\n1. Reading data directly from Live Google Doc for Workspace: {team_id}...")
+    print(f"\nReading data directly from Live Google Doc for Workspace: {team_id}...")
     doc_id = os.environ.get("DESIGN_DOC_ID")
     
     if not doc_id:
         print("❌ Error: DESIGN_DOC_ID is missing in environment variables.")
-        return
+        return []
 
-    raw_document = get_google_doc_text(doc_id, process_images=True)
+    # 1. H2 sections nikalo
+    sections = get_google_doc_sections(doc_id, process_images=True)
     
-    print("2. Chunking text...")
-    chunks = smart_chunker(raw_document)
-    
-    if not chunks:
-        print("⚠️️ No text content found to embed.")
-        return
+    # 2. Purani memory load karo
+    old_hashes = {}
+    if os.path.exists(section_memory_file):
+        with open(section_memory_file, "r") as f:
+            old_hashes = json.load(f)
+            
+    new_hashes = {}
+    updated_sections_info = []
+    all_chunks = []
+
+    print("2. Comparing Sections and Chunking text...")
+    for sec_name, sec_data in sections.items():
+        sec_text = sec_data["text"]
+        sec_link = sec_data["link"]
+        
+        # Text ka fingerprint banao
+        sec_hash = hashlib.md5(sec_text.encode('utf-8')).hexdigest()
+        new_hashes[sec_name] = sec_hash
+        
+        # 🔥 MAGIC: Agar fingerprint match nahi kiya, matlab yeh section UPDATE hua hai!
+        if old_hashes.get(sec_name) != sec_hash:
+            updated_sections_info.append(f"• *{sec_name}* | <{sec_link}|🔗 Jump to this section>")
+            
+        sec_chunks = smart_chunker(sec_text)
+        all_chunks.extend(sec_chunks)
+
+    # Nayi memory save kar lo
+    with open(section_memory_file, "w") as f:
+        json.dump(new_hashes, f)
+
+    if not all_chunks:
+        print("⚠ No text content found to embed.")
+        return []
 
     print("3. Generating embeddings via Gemini Cloud API (Zero RAM)...")
     embeddings = []
-    for i, chunk in enumerate(chunks):
-        # Gemini ko text bhej kar vector nikal rahe hain
-        res = genai.embed_content(model="models/text-embedding-004", content=chunk)
+    for i, chunk in enumerate(all_chunks):
+        res = genai.embed_content(model="models/embedding-001", content=chunk)
         embeddings.append(res['embedding'])
-        
-        # 🔥 YAHAN BHI SPEED-BREAKER LAGA DIYA (503 Error se bachne ke liye)
-        print(f"   Chunk {i+1}/{len(chunks)} embedded...")
+        print(f"   Chunk {i+1}/{len(all_chunks)} embedded...")
         time.sleep(1) 
     
     print("4. Updating Pinecone CLOUD Database...")
     pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
-    
-    # NAYA NAAM: Kyunki Gemini ka vector size alag (768) hota hai, hum naya index banayenge
     index_name = os.environ.get("PINECONE_INDEX_NAME", "docubot-gemini-index")
     
-    # Check if index exists, if not create it (Gemini uses 768 dimensions)
     if index_name not in pc.list_indexes().names():
         print(f"☁️ Cloud par naya '{index_name}' index ban raha hai (Wait karo)...")
-        pc.create_index(
-            name=index_name,
-            dimension=768,  # 🔥 Gemini ke hisaab se 768 dimension set kar diya
-            metric='cosine',
-            spec=ServerlessSpec(cloud='aws', region='us-east-1')
-        )
+        pc.create_index(name=index_name, dimension=768, metric='cosine', spec=ServerlessSpec(cloud='aws', region='us-east-1'))
         while not pc.describe_index(index_name).status['ready']:
             time.sleep(1)
             
     index = pc.Index(index_name)
-    
-    # 🔥 SECURE NAMESPACE ISOLATION: Har company ka data uske apne workspace namespace mein jayega
     namespace = f"workspace_{team_id}"
     
     vectors_to_upsert = []
-    for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+    for i, (chunk, emb) in enumerate(zip(all_chunks, embeddings)):
         vectors_to_upsert.append({
             "id": f"doc_chunk_{i}",
             "values": emb,
-            "metadata": {
-                "text": chunk, 
-                "workspace_id": team_id # 🔥 Dynamic Security Tag
-            } 
+            "metadata": {"text": chunk, "workspace_id": team_id} 
         })
         
     index.upsert(vectors=vectors_to_upsert, namespace=namespace)
-    print(f"✅ BINGO! Google Doc ka sara gyaan CLOUD (Pinecone) ke namespace '{namespace}' mein secure hai.\n")
+    print(f"✅ BINGO! Google Doc ka sara gyaan Pinecone mein secure hai.\n")
+    
+    # 🔥 Yeh function ab updated list return karega Slack ke liye
+    return updated_sections_info
 
 if __name__ == "__main__":
     update_database("company_A")
