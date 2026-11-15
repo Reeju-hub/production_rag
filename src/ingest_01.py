@@ -8,21 +8,19 @@ import time
 import hashlib
 import tiktoken
 import requests
-from io import BytesIO
-from PIL import Image
+import base64
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from pinecone import Pinecone, ServerlessSpec 
-from google import genai
 
 load_dotenv()
 
-# 🔥 API VERSION V1BETA FOR LATEST MODELS
-gemini_client = genai.Client(
-    api_key=os.environ.get("GEMINI_API_KEY"),
-    http_options={'api_version': 'v1beta'}
-)
+# 🔥 DIRECT API ENDPOINTS (Bypassing SDK completely to avoid version clash)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+VISION_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+
 section_memory_file = "section_hashes.json"
 
 def get_image_description(image_url):
@@ -36,22 +34,33 @@ def get_image_description(image_url):
         if response.status_code != 200:
             return f"Image download failed with status {response.status_code}"
             
-        img = Image.open(BytesIO(response.content))
+        # Image ko base64 mein convert karna API ke liye
+        img_base64 = base64.b64encode(response.content).decode('utf-8')
         
-        # 🔥 LATEST VISION MODEL
-        res = gemini_client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=["Describe what is strictly inside this image in detail. Maximum 2 lines. Answer in English.", img]
-        )
-        description = res.text.strip()
-        processed_images_cache[image_url] = description
-        return description
+        # 🔥 DIRECT HTTP CALL TO GEMINI VISION
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": "Describe what is strictly inside this image in detail. Maximum 2 lines. Answer in English."},
+                    {"inlineData": {"mimeType": "image/jpeg", "data": img_base64}}
+                ]
+            }]
+        }
+        res = requests.post(VISION_API_URL, json=payload, headers={'Content-Type': 'application/json'})
+        
+        if res.status_code == 200:
+            description = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            processed_images_cache[image_url] = description
+            return description
+        else:
+            print(f"⚠️ Gemini Vision API error: {res.text}")
+            fallback_text = "Image description unavailable."
+            processed_images_cache[image_url] = fallback_text
+            return fallback_text
         
     except Exception as e:
-        print(f"⚠️ Gemini Vision AI error: {e}")
-        fallback_text = "Image description unavailable."
-        processed_images_cache[image_url] = fallback_text
-        return fallback_text
+        print(f"⚠️ Error processing image: {e}")
+        return "Image description unavailable."
 
 def get_google_doc_sections(doc_id, process_images=True):
     SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
@@ -168,13 +177,19 @@ def update_database(team_id: str = "company_A"):
     print("3. Generating embeddings via Gemini Cloud API (Zero RAM)...")
     embeddings = []
     for i, chunk in enumerate(all_chunks):
-        # 🔥 LATEST EMBEDDING MODEL
-        res = gemini_client.models.embed_content(
-            model="text-embedding-004", 
-            contents=chunk
-        )
-        embeddings.append(res.embeddings[0].values)
-        print(f"   Chunk {i+1}/{len(all_chunks)} embedded...")
+        # 🔥 DIRECT HTTP CALL TO GEMINI EMBEDDING
+        payload = {
+            "model": "models/text-embedding-004",
+            "content": {"parts": [{"text": chunk}]}
+        }
+        res = requests.post(EMBEDDING_API_URL, json=payload, headers={'Content-Type': 'application/json'})
+        
+        if res.status_code == 200:
+            embeddings.append(res.json()['embedding']['values'])
+            print(f"   Chunk {i+1}/{len(all_chunks)} embedded...")
+        else:
+            print(f"❌ Error embedding chunk {i+1}: {res.text}")
+            
         time.sleep(1) 
     
     print("4. Updating Pinecone CLOUD Database...")
