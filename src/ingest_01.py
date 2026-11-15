@@ -1,4 +1,3 @@
-# 🧠 SMART CACHE: Ek baar jo image padh li, uska description yahan save ho jayega
 processed_images_cache = {}
 
 import os
@@ -8,20 +7,18 @@ import time
 import hashlib
 import tiktoken
 import requests
-import base64
+from io import BytesIO
+from PIL import Image
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from pinecone import Pinecone, ServerlessSpec 
+from google import genai
 
 load_dotenv()
 
-# 🔥 THE GOLDEN COMBINATION THAT WORKED: v1beta + embedding-001 + gemini-pro-vision
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-VISION_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={GEMINI_API_KEY}"
-EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={GEMINI_API_KEY}"
-
+# 🔥 OFFICIAL CLEAN SDK 
+gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 section_memory_file = "section_hashes.json"
 
 def get_image_description(image_url):
@@ -35,31 +32,22 @@ def get_image_description(image_url):
         if response.status_code != 200:
             return f"Image download failed with status {response.status_code}"
             
-        img_base64 = base64.b64encode(response.content).decode('utf-8')
+        img = Image.open(BytesIO(response.content))
         
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": "Describe what is strictly inside this image in detail. Maximum 2 lines. Answer in English."},
-                    {"inlineData": {"mimeType": "image/jpeg", "data": img_base64}}
-                ]
-            }]
-        }
-        res = requests.post(VISION_API_URL, json=payload, headers={'Content-Type': 'application/json'})
-        
-        if res.status_code == 200:
-            description = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            processed_images_cache[image_url] = description
-            return description
-        else:
-            print(f"⚠️ Gemini Vision API error: {res.text}")
-            fallback_text = "Image description unavailable."
-            processed_images_cache[image_url] = fallback_text
-            return fallback_text
+        # 🔥 LATEST VISION MODEL
+        res = gemini_client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=["Describe what is strictly inside this image in detail. Maximum 2 lines. Answer in English.", img]
+        )
+        description = res.text.strip()
+        processed_images_cache[image_url] = description
+        return description
         
     except Exception as e:
-        print(f"⚠️ Error processing image: {str(e)}")
-        return "Image description unavailable."
+        print(f"⚠️ Gemini Vision AI error: {e}")
+        fallback_text = "Image description unavailable."
+        processed_images_cache[image_url] = fallback_text
+        return fallback_text
 
 def get_google_doc_sections(doc_id, process_images=True):
     SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
@@ -173,21 +161,16 @@ def update_database(team_id: str = "company_A"):
         print("⚠ No text content found to embed.")
         return []
 
-    print("3. Generating embeddings via Google REST API (Zero RAM)...")
+    print("3. Generating embeddings via Google GenAI SDK (Zero RAM)...")
     embeddings = []
     for i, chunk in enumerate(all_chunks):
-        payload = {
-            "model": "models/embedding-001",
-            "content": {"parts": [{"text": chunk}]}
-        }
-        res = requests.post(EMBEDDING_API_URL, json=payload, headers={'Content-Type': 'application/json'})
-        
-        if res.status_code == 200:
-            embeddings.append(res.json()['embedding']['values'])
-            print(f"   Chunk {i+1}/{len(all_chunks)} embedded...")
-        else:
-            print(f"❌ Error embedding chunk {i+1}: {res.text}")
-            
+        # 🔥 LATEST EMBEDDING MODEL
+        res = gemini_client.models.embed_content(
+            model="text-embedding-004", 
+            contents=chunk
+        )
+        embeddings.append(res.embeddings[0].values)
+        print(f"   Chunk {i+1}/{len(all_chunks)} embedded...")
         time.sleep(1) 
     
     print("4. Updating Pinecone CLOUD Database...")
