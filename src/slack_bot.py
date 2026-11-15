@@ -24,9 +24,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# 🔥 DIRECT REST API URLs (v1 Stable Channel + NEW Active Models)
-EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
-CHAT_API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+# 🔥 THE GOLDEN COMBINATION THAT WORKED: v1beta + embedding-001 + gemini-pro
+EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={GEMINI_API_KEY}"
+CHAT_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
 
 INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-gemini-index")
 user_memory = {}
@@ -83,9 +83,9 @@ async def slack_events(payload: SlackEventPayload):
             try:
                 index = pc.Index(INDEX_NAME)
                 
-                # 🔥 1. Get Embedding via REST API (New Stable Model)
+                # 🔥 EXACT SAME PAYLOAD THAT WORKED YESTERDAY
                 embed_payload = {
-                    "model": "models/text-embedding-004",
+                    "model": "models/embedding-001",
                     "content": {"parts": [{"text": user_question}]}
                 }
                 embed_res = requests.post(EMBEDDING_API_URL, json=embed_payload, headers={'Content-Type': 'application/json'})
@@ -95,7 +95,6 @@ async def slack_events(payload: SlackEventPayload):
                     
                 query_vector = embed_res.json()['embedding']['values']
 
-                # 🔥 2. Pinecone Vector Search
                 namespace = f"workspace_{team_id}"
                 search_results = index.query(
                     namespace=namespace,
@@ -108,7 +107,6 @@ async def slack_events(payload: SlackEventPayload):
                 if not context_text:
                     context_text = "No relevant enterprise documents found in your synchronized Google Drive repository."
 
-                # 🔥 3. Generate Answer via REST API (New Stable Model)
                 prompt = f"You are DocuBot.ai, an elite enterprise AI assistant. Use the following context retrieved from the company's secure Google Docs to answer the user query accurately.\n\nContext:\n{context_text}\n\nUser Query: {user_question}\nAnswer:"
                 
                 chat_payload = {
@@ -123,7 +121,6 @@ async def slack_events(payload: SlackEventPayload):
 
                 citation_url = os.environ.get("GOOGLE_DOC_URL", "https://docs.google.com")
 
-                # 🔥 4. Update Slack Message
                 await client.post(
                     "https://slack.com/api/chat.update",
                     headers={"Authorization": f"Bearer {bot_access_token}"},
@@ -170,7 +167,7 @@ async def slack_events(payload: SlackEventPayload):
                 user_memory[user_id] = history
 
             except Exception as e:
-                print(f"RAG / AI Pipeline Error: {e}")
+                print(f"RAG / AI Pipeline Error: {str(e)}")
                 await client.post(
                     "https://slack.com/api/chat.update",
                     headers={"Authorization": f"Bearer {bot_access_token}"},

@@ -16,11 +16,11 @@ from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 
-# 🔥 DIRECT API ENDPOINTS (v1 Stable Channel + NEW Active Models)
+# 🔥 THE GOLDEN COMBINATION THAT WORKED: v1beta + embedding-001 + gemini-pro-vision
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-VISION_API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+VISION_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={GEMINI_API_KEY}"
+EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={GEMINI_API_KEY}"
 
 section_memory_file = "section_hashes.json"
 
@@ -58,7 +58,7 @@ def get_image_description(image_url):
             return fallback_text
         
     except Exception as e:
-        print(f"⚠️ Error processing image: {e}")
+        print(f"⚠️ Error processing image: {str(e)}")
         return "Image description unavailable."
 
 def get_google_doc_sections(doc_id, process_images=True):
@@ -177,7 +177,7 @@ def update_database(team_id: str = "company_A"):
     embeddings = []
     for i, chunk in enumerate(all_chunks):
         payload = {
-            "model": "models/text-embedding-004",
+            "model": "models/embedding-001",
             "content": {"parts": [{"text": chunk}]}
         }
         res = requests.post(EMBEDDING_API_URL, json=payload, headers={'Content-Type': 'application/json'})
