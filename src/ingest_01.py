@@ -16,10 +16,13 @@ from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 
-# 🔥 DIRECT API ENDPOINTS (Bypassing SDK completely to avoid version clash)
+# 🔥 DIRECT API ENDPOINTS (Using Universally Unblocked Models)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-VISION_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
+
+# Vision ke liye purana stable model (gemini-pro-vision)
+VISION_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={GEMINI_API_KEY}"
+# Embedding ke liye purana stable model (embedding-001)
+EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={GEMINI_API_KEY}"
 
 section_memory_file = "section_hashes.json"
 
@@ -34,10 +37,9 @@ def get_image_description(image_url):
         if response.status_code != 200:
             return f"Image download failed with status {response.status_code}"
             
-        # Image ko base64 mein convert karna API ke liye
         img_base64 = base64.b64encode(response.content).decode('utf-8')
         
-        # 🔥 DIRECT HTTP CALL TO GEMINI VISION
+        # 🔥 DIRECT HTTP CALL (Universally Supported Vision)
         payload = {
             "contents": [{
                 "parts": [
@@ -174,12 +176,12 @@ def update_database(team_id: str = "company_A"):
         print("⚠ No text content found to embed.")
         return []
 
-    print("3. Generating embeddings via Gemini Cloud API (Zero RAM)...")
+    print("3. Generating embeddings via Google REST API (Zero RAM)...")
     embeddings = []
     for i, chunk in enumerate(all_chunks):
-        # 🔥 DIRECT HTTP CALL TO GEMINI EMBEDDING
+        # 🔥 DIRECT HTTP CALL (Universally Supported Embedding Model)
         payload = {
-            "model": "models/text-embedding-004",
+            "model": "models/embedding-001",
             "content": {"parts": [{"text": chunk}]}
         }
         res = requests.post(EMBEDDING_API_URL, json=payload, headers={'Content-Type': 'application/json'})
@@ -213,6 +215,11 @@ def update_database(team_id: str = "company_A"):
             "metadata": {"text": chunk, "workspace_id": team_id} 
         })
         
+    # 🔥 Pinceone Safety Lock: Agar vectors khali hain toh crash mat karo!
+    if not vectors_to_upsert:
+        print("⚠️ Koi valid vectors nahi mile, Pinecone update skip kar rahe hain.")
+        return updated_sections_info
+
     index.upsert(vectors=vectors_to_upsert, namespace=namespace)
     print(f"✅ BINGO! Google Doc ka sara gyaan Pinecone mein secure hai.\n")
     
