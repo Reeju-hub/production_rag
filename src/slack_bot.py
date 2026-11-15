@@ -6,8 +6,8 @@ from pydantic import BaseModel
 from pathlib import Path
 from supabase import create_client
 from pinecone import Pinecone
-from google import genai
 import httpx
+import requests
 
 load_dotenv()
 env_path = Path(__file__).resolve().parent.parent / '.env'
@@ -24,11 +24,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# 🔥 API VERSION V1BETA FOR LATEST MODELS
-gemini_client = genai.Client(
-    api_key=GEMINI_API_KEY,
-    http_options={'api_version': 'v1beta'}
-)
+# 🔥 DIRECT REST API URLs (Universally Unblocked Models)
+EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={GEMINI_API_KEY}"
+CHAT_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
 
 INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-gemini-index")
 user_memory = {}
@@ -42,6 +40,7 @@ class SlackEventPayload(BaseModel):
 
 @app.post("/api/slack/events")
 async def slack_events(payload: SlackEventPayload):
+    # 1. Handle Slack URL Verification Challenge
     if payload.type == "url_verification":
         return {"challenge": payload.challenge}
 
@@ -49,6 +48,7 @@ async def slack_events(payload: SlackEventPayload):
     if not event:
         return {"status": "ignored"}
 
+    # 2. Process App Mentions (@DocuBot)
     if event.get("type") == "app_mention":
         team_id = payload.team_id
         channel_id = event.get("channel")
@@ -59,6 +59,7 @@ async def slack_events(payload: SlackEventPayload):
         if not user_question:
             return {"status": "empty_query"}
 
+        # 3. Fetch Company Bot Token from Supabase
         db_response = supabase.table("slack_installations").select("access_token").eq("team_id", team_id).execute()
         
         if not db_response.data or len(db_response.data) == 0:
@@ -68,6 +69,7 @@ async def slack_events(payload: SlackEventPayload):
         history = user_memory.get(user_id, [])
 
         async with httpx.AsyncClient() as client:
+            # Send initial searching message
             init_res = await client.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {bot_access_token}"},
@@ -85,13 +87,19 @@ async def slack_events(payload: SlackEventPayload):
             try:
                 index = pc.Index(INDEX_NAME)
                 
-                # 🔥 LATEST EMBEDDING MODEL
-                embed_response = gemini_client.models.embed_content(
-                    model="text-embedding-004",
-                    contents=user_question
-                )
-                query_vector = embed_response.embeddings[0].values
+                # 🔥 1. Get Embedding via REST API (Bypassing SDK)
+                embed_payload = {
+                    "model": "models/embedding-001",
+                    "content": {"parts": [{"text": user_question}]}
+                }
+                embed_res = requests.post(EMBEDDING_API_URL, json=embed_payload, headers={'Content-Type': 'application/json'})
+                
+                if embed_res.status_code != 200:
+                    raise Exception(f"Embedding API Error: {embed_res.text}")
+                    
+                query_vector = embed_res.json()['embedding']['values']
 
+                # 🔥 2. Pinecone Vector Search
                 namespace = f"workspace_{team_id}"
                 search_results = index.query(
                     namespace=namespace,
@@ -104,23 +112,22 @@ async def slack_events(payload: SlackEventPayload):
                 if not context_text:
                     context_text = "No relevant enterprise documents found in your synchronized Google Drive repository."
 
-                prompt = f"""You are DocuBot.ai, an elite enterprise AI assistant. Use the following context retrieved from the company's secure Google Docs to answer the user query accurately.
-
-Context:
-{context_text}
-
-User Query: {user_question}
-Answer:"""
-
-                # 🔥 LATEST CHAT MODEL
-                ai_response = gemini_client.models.generate_content(
-                    model="gemini-1.5-flash",
-                    contents=prompt
-                )
-                final_answer = ai_response.text
+                # 🔥 3. Generate Answer via REST API (Bypassing SDK)
+                prompt = f"You are DocuBot.ai, an elite enterprise AI assistant. Use the following context retrieved from the company's secure Google Docs to answer the user query accurately.\n\nContext:\n{context_text}\n\nUser Query: {user_question}\nAnswer:"
+                
+                chat_payload = {
+                    "contents": [{"parts": [{"text": prompt}]}]
+                }
+                chat_res = requests.post(CHAT_API_URL, json=chat_payload, headers={'Content-Type': 'application/json'})
+                
+                if chat_res.status_code != 200:
+                    raise Exception(f"Gemini API Error: {chat_res.text}")
+                    
+                final_answer = chat_res.json()['candidates'][0]['content']['parts'][0]['text']
 
                 citation_url = os.environ.get("GOOGLE_DOC_URL", "https://docs.google.com")
 
+                # 🔥 4. Update Slack Message
                 await client.post(
                     "https://slack.com/api/chat.update",
                     headers={"Authorization": f"Bearer {bot_access_token}"},
@@ -161,6 +168,7 @@ Answer:"""
                     }
                 )
 
+                # Update memory
                 history.append((user_question, final_answer))
                 if len(history) > 3:
                     history.pop(0)
