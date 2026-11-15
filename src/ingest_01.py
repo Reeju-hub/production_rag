@@ -16,11 +16,11 @@ from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 
-# 🔥 DIRECT API ENDPOINTS (Shifted to v1 Stable Channel)
+# 🔥 DIRECT API ENDPOINTS (v1 Stable Channel + NEW Active Models)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-VISION_API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro-vision:generateContent?key={GEMINI_API_KEY}"
-EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1/models/embedding-001:embedContent?key={GEMINI_API_KEY}"
+VISION_API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key={GEMINI_API_KEY}"
 
 section_memory_file = "section_hashes.json"
 
@@ -177,7 +177,7 @@ def update_database(team_id: str = "company_A"):
     embeddings = []
     for i, chunk in enumerate(all_chunks):
         payload = {
-            "model": "models/embedding-001",
+            "model": "models/text-embedding-004",
             "content": {"parts": [{"text": chunk}]}
         }
         res = requests.post(EMBEDDING_API_URL, json=payload, headers={'Content-Type': 'application/json'})
