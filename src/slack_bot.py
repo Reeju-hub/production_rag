@@ -43,9 +43,9 @@ def get_working_models():
     except:
         return "models/gemini-3.8-flash", "models/text-embedding-004"
 
-# 🔥 PERMANENT STABLE OVERRIDE (Bypassing 503 High Demand completely)
+# 🔥 PERMANENT STABLE OVERRIDE (For your specific API Key)
 CHAT_MODEL = "models/gemini-1.5-flash"
-EMBED_MODEL = "models/text-embedding-004"
+EMBED_MODEL = "models/embedding-001"
 
 EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{EMBED_MODEL}:embedContent?key={GEMINI_API_KEY}"
 CHAT_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{CHAT_MODEL}:generateContent?key={GEMINI_API_KEY}"
