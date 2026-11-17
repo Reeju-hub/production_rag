@@ -50,7 +50,8 @@ class SlackEventPayload(BaseModel):
     team_id: str = None
 
 # 🔥 EXPONENTIAL BACKOFF
-def call_gemini_with_retry(url, payload, max_retries=3):
+# 🔥 SMART EXPONENTIAL BACKOFF FOR EMBEDDINGS & CHAT
+def call_gemini_with_retry(url, payload, max_retries=4):
     headers = {'Content-Type': 'application/json'}
     res = None
     for attempt in range(max_retries):
@@ -58,12 +59,13 @@ def call_gemini_with_retry(url, payload, max_retries=3):
         if res.status_code == 200:
             return res
         elif res.status_code in [503, 429]:
-            wait_time = 2 ** attempt 
-            print(f"⚠️ API Overloaded ({res.status_code}). Retrying in {wait_time}s...")
+            # Rate limit (429) ke liye thoda lamba wait time (3s, 6s, 12s)
+            wait_time = 3 * (2 ** attempt)
+            print(f"⚠️ Google API Quota/Overload ({res.status_code}). Waiting {wait_time}s before retry...")
             time.sleep(wait_time)
         else:
             return res
-    return res # Return exact error instead of None
+    return res
 
 @app.post("/api/slack/events")
 async def slack_events(payload: SlackEventPayload):
