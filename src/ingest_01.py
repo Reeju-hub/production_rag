@@ -15,12 +15,31 @@ from googleapiclient.discovery import build
 from pinecone import Pinecone, ServerlessSpec 
 
 load_dotenv()
-
-# 🔥 THE GOLDEN COMBINATION THAT WORKED: Direct REST API + Globally Unblocked Models + v1beta
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-VISION_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={GEMINI_API_KEY}"
-EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key={GEMINI_API_KEY}"
+# 🔥 DYNAMIC MODEL AUTO-DISCOVERY (Yeh Google se khud zinda models fetch karega)
+def get_working_models():
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    try:
+        data = requests.get(url, timeout=10).json()
+        chat_model = "models/gemini-1.5-flash"
+        embed_model = "models/text-embedding-004"
+        if 'models' in data:
+            valid_embeds = [m['name'] for m in data['models'] if 'embedContent' in m.get('supportedGenerationMethods', [])]
+            if valid_embeds:
+                embed_model = next((m for m in valid_embeds if '004' in m), valid_embeds[0])
+            
+            valid_chats = [m['name'] for m in data['models'] if 'generateContent' in m.get('supportedGenerationMethods', []) and 'gemini' in m['name']]
+            if valid_chats:
+                chat_model = next((m for m in valid_chats if 'flash' in m), valid_chats[0])
+        return chat_model, embed_model
+    except:
+        return "models/gemini-1.5-flash", "models/text-embedding-004"
+
+CHAT_MODEL, EMBED_MODEL = get_working_models()
+
+VISION_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{CHAT_MODEL}:generateContent?key={GEMINI_API_KEY}"
+EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{EMBED_MODEL}:embedContent?key={GEMINI_API_KEY}"
 
 section_memory_file = "section_hashes.json"
 
@@ -176,8 +195,9 @@ def update_database(team_id: str = "company_A"):
     print("3. Generating embeddings via Google REST API (Zero RAM)...")
     embeddings = []
     for i, chunk in enumerate(all_chunks):
+        # 🔥 PAYLOAD BHI DYNAMIC HAI AB
         payload = {
-            "model": "models/embedding-001",
+            "model": EMBED_MODEL,
             "content": {"parts": [{"text": chunk}]}
         }
         res = requests.post(EMBEDDING_API_URL, json=payload, headers={'Content-Type': 'application/json'})
