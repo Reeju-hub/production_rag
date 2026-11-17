@@ -24,7 +24,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# 🔥 ULTIMATE AUTO-DISCOVERY (Never gives 404)
+# 🔥 ENTERPRISE FAILOVER: Get ALL valid models instead of just one
 def get_working_models():
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     try:
@@ -32,16 +32,17 @@ def get_working_models():
         valid_embeds = [m['name'] for m in data.get('models', []) if 'embedContent' in m.get('supportedGenerationMethods', [])]
         valid_chats = [m['name'] for m in data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', []) and 'gemini' in m['name']]
         
-        embed_model = valid_embeds[0] if valid_embeds else "models/text-embedding-004"
-        chat_model = valid_chats[0] if valid_chats else "models/gemini-1.5-flash"
-        return chat_model, embed_model
+        # Fallbacks just in case API acts completely weird
+        if not valid_embeds: valid_embeds = ["models/text-embedding-004"]
+        if not valid_chats: valid_chats = ["models/gemini-1.5-flash", "models/gemini-pro"]
+        
+        # Return ALL valid chat models as a list for our Waterfall
+        return valid_chats, valid_embeds[0]
     except:
-        return "models/gemini-1.5-flash", "models/text-embedding-004"
+        return ["models/gemini-1.5-flash", "models/gemini-pro"], "models/text-embedding-004"
 
-CHAT_MODEL, EMBED_MODEL = get_working_models()
-
+ALL_CHAT_MODELS, EMBED_MODEL = get_working_models()
 EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{EMBED_MODEL}:embedContent?key={GEMINI_API_KEY}"
-CHAT_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{CHAT_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
 BASE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-index").lower()
 user_memory = {}
@@ -53,16 +54,15 @@ class SlackEventPayload(BaseModel):
     event: dict = None
     team_id: str = None
 
-# 🔥 EXPONENTIAL RETRY WRAPPER (Never fails on 503)
-def call_gemini_with_retry(url, payload, max_retries=5):
+def call_gemini_with_retry(url, payload, max_retries=2):
     headers = {'Content-Type': 'application/json'}
     for attempt in range(max_retries):
         res = requests.post(url, json=payload, headers=headers)
         if res.status_code == 200:
             return res
-        elif res.status_code == 503:
-            wait_time = 2 ** attempt
-            print(f"⚠️ Gemini 503 High Demand. Retrying attempt {attempt+2} in {wait_time}s...")
+        elif res.status_code in [503, 429]:
+            wait_time = 1
+            print(f"⚠️ Model Overloaded ({res.status_code}). Quick retry...")
             time.sleep(wait_time)
         else:
             return res
@@ -101,7 +101,7 @@ async def slack_events(payload: SlackEventPayload):
                 headers={"Authorization": f"Bearer {bot_access_token}"},
                 json={
                     "channel": channel_id,
-                    "text": f"🔍 Searching secure documents..."
+                    "text": f"🔍 Searching secure documents for: '{user_question}'..."
                 }
             )
             init_data = init_res.json()
@@ -111,6 +111,7 @@ async def slack_events(payload: SlackEventPayload):
             message_ts = init_data["ts"]
 
             try:
+                # 1. Embed Question
                 embed_payload = {
                     "model": EMBED_MODEL,
                     "content": {"parts": [{"text": user_question}]}
@@ -123,7 +124,7 @@ async def slack_events(payload: SlackEventPayload):
                 query_vector = embed_res.json()['embedding']['values']
                 vector_dim = len(query_vector)
                 
-                # 🔥 DYNAMIC INDEX MATCHING (Immune to dimension mismatches)
+                # 2. Search Pinecone (With immune dimension matching)
                 dynamic_index_name = f"{BASE_INDEX_NAME}-{vector_dim}"
                 index = pc.Index(dynamic_index_name)
 
@@ -141,15 +142,28 @@ async def slack_events(payload: SlackEventPayload):
 
                 prompt = f"You are DocuBot.ai, an elite enterprise AI assistant. Use the following context retrieved from the company's secure Google Docs to answer the user query accurately.\n\nContext:\n{context_text}\n\nUser Query: {user_question}\nAnswer:"
                 
-                chat_payload = {
-                    "contents": [{"parts": [{"text": prompt}]}]
-                }
-                chat_res = call_gemini_with_retry(CHAT_API_URL, chat_payload)
+                # 3. 🔥 WATERFALL MODEL FAILOVER LOGIC
+                final_answer = None
+                last_error = "Service Unavailable"
                 
-                if not chat_res or chat_res.status_code != 200:
-                    raise Exception(f"Gemini API Error: {chat_res.text if chat_res else 'Service Unavailable'}")
+                # Ek-ek karke saare models try karega jab tak answer na mil jaye!
+                for model_name in ALL_CHAT_MODELS:
+                    print(f"🤖 Attempting answer with model: {model_name}...")
+                    chat_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
+                    chat_payload = {"contents": [{"parts": [{"text": prompt}]}]}
                     
-                final_answer = chat_res.json()['candidates'][0]['content']['parts'][0]['text']
+                    chat_res = call_gemini_with_retry(chat_url, chat_payload, max_retries=2)
+                    
+                    if chat_res and chat_res.status_code == 200:
+                        final_answer = chat_res.json()['candidates'][0]['content']['parts'][0]['text']
+                        break # Success! Loop ko tod do aur bahar niklo
+                    else:
+                        last_error = chat_res.text if chat_res else "503 High Demand"
+                        print(f"⚠️ Model {model_name} failed. Falling back to next available model...")
+                        
+                if not final_answer:
+                    raise Exception(f"All Google AI Models are currently overloaded. Last error: {last_error}")
+
                 citation_url = os.environ.get("GOOGLE_DOC_URL", "https://docs.google.com")
 
                 await client.post(
@@ -169,24 +183,6 @@ async def slack_events(payload: SlackEventPayload):
                             },
                             {
                                 "type": "divider"
-                            },
-                            {
-                                "type": "actions",
-                                "block_id": "feedback_block",
-                                "elements": [
-                                    {
-                                        "type": "button",
-                                        "text": {"type": "plain_text", "text": "👍 Helpful", "emoji": True},
-                                        "value": "helpful_yes",
-                                        "action_id": "btn_helpful"
-                                    },
-                                    {
-                                        "type": "button",
-                                        "text": {"type": "plain_text", "text": "👎 Not Helpful", "emoji": True},
-                                        "value": "helpful_no",
-                                        "action_id": "btn_not_helpful"
-                                    }
-                                ]
                             }
                         ]
                     }
