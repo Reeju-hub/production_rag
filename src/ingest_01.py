@@ -1,4 +1,3 @@
-# 🧠 SMART CACHE: Ek baar jo image padh li, uska description yahan save ho jayega
 processed_images_cache = {}
 
 import os
@@ -17,39 +16,45 @@ from pinecone import Pinecone, ServerlessSpec
 load_dotenv()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# 🔥 DYNAMIC MODEL AUTO-DISCOVERY (Updated to 3.8-flash as per Google's log)
+# 🔥 ULTIMATE AUTO-DISCOVERY (Never gives 404)
 def get_working_models():
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     try:
         data = requests.get(url, timeout=10).json()
-        chat_model = "models/gemini-3.8-flash"
-        embed_model = "models/text-embedding-004"
-        if 'models' in data:
-            valid_embeds = [m['name'] for m in data['models'] if 'embedContent' in m.get('supportedGenerationMethods', [])]
-            if valid_embeds:
-                embed_model = next((m for m in valid_embeds if '004' in m), valid_embeds[0])
-            
-            valid_chats = [m['name'] for m in data['models'] if 'generateContent' in m.get('supportedGenerationMethods', []) and 'gemini' in m['name']]
-            if valid_chats:
-                chat_model = next((m for m in valid_chats if '3.8-flash' in m), valid_chats[0])
+        valid_embeds = [m['name'] for m in data.get('models', []) if 'embedContent' in m.get('supportedGenerationMethods', [])]
+        valid_chats = [m['name'] for m in data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', []) and 'gemini' in m['name']]
+        
+        embed_model = valid_embeds[0] if valid_embeds else "models/text-embedding-004"
+        chat_model = valid_chats[0] if valid_chats else "models/gemini-1.5-flash"
         return chat_model, embed_model
     except:
-        return "models/gemini-3.8-flash", "models/text-embedding-004"
+        return "models/gemini-1.5-flash", "models/text-embedding-004"
 
-# 🔥 PERMANENT STABLE OVERRIDE (For your specific API Key)
-CHAT_MODEL = "models/gemini-1.5-flash"
-EMBED_MODEL = "models/embedding-001"
+CHAT_MODEL, EMBED_MODEL = get_working_models()
 
 VISION_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{CHAT_MODEL}:generateContent?key={GEMINI_API_KEY}"
 EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{EMBED_MODEL}:embedContent?key={GEMINI_API_KEY}"
 
 section_memory_file = "section_hashes.json"
 
+# 🔥 EXPONENTIAL RETRY WRAPPER (Never fails on 503)
+def call_gemini_with_retry(url, payload, max_retries=5):
+    headers = {'Content-Type': 'application/json'}
+    for attempt in range(max_retries):
+        res = requests.post(url, json=payload, headers=headers)
+        if res.status_code == 200:
+            return res
+        elif res.status_code == 503:
+            wait_time = 2 ** attempt
+            print(f"⚠️ Gemini 503 High Demand. Retrying attempt {attempt+2} in {wait_time}s...")
+            time.sleep(wait_time)
+        else:
+            return res
+    return None
+
 def get_image_description(image_url):
     if image_url in processed_images_cache:
-        print("⚡ Cache hit! Image pehle se read hai.")
         return processed_images_cache[image_url]
-        
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(image_url, headers=headers, timeout=10)
@@ -57,7 +62,6 @@ def get_image_description(image_url):
             return f"Image download failed with status {response.status_code}"
             
         img_base64 = base64.b64encode(response.content).decode('utf-8')
-        
         payload = {
             "contents": [{
                 "parts": [
@@ -66,26 +70,21 @@ def get_image_description(image_url):
                 ]
             }]
         }
-        res = requests.post(VISION_API_URL, json=payload, headers={'Content-Type': 'application/json'})
-        
-        if res.status_code == 200:
+        res = call_gemini_with_retry(VISION_API_URL, payload)
+        if res and res.status_code == 200:
             description = res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             processed_images_cache[image_url] = description
             return description
         else:
-            print(f"⚠️ Gemini Vision API error: {res.text}")
             fallback_text = "Image description unavailable."
             processed_images_cache[image_url] = fallback_text
             return fallback_text
-        
     except Exception as e:
-        print(f"⚠️ Error processing image: {str(e)}")
         return "Image description unavailable."
 
 def get_google_doc_sections(doc_id, process_images=True):
     SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
     google_creds_string = os.environ.get("GOOGLE_CREDENTIALS")
-    
     if google_creds_string:
         creds_info = json.loads(google_creds_string)
         creds = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
@@ -117,17 +116,14 @@ def get_google_doc_sections(doc_id, process_images=True):
                         image_url = inline_objects[obj_id].get('inlineObjectProperties', {}).get('embeddedObject', {}).get('imageProperties', {}).get('contentUri')
                         if image_url:
                             if process_images:
-                                print(f"🔗 DEBUG: Image detect hui! AI ko bhej rahe hain...")
                                 description = get_image_description(image_url)
                                 line_text += f"\n[🖼️ IMAGE DETECTED: {description}]\n"
-                                time.sleep(2) 
                             else:
                                 line_text += f"\n[🖼️ IMAGE ID: {obj_id}]\n"
             
             if style == 'HEADING_2' and line_text.strip():
                 if current_text.strip():
                     sections[current_h2] = {"link": current_link, "text": current_text.strip()}
-                
                 current_h2 = line_text.strip()
                 current_link = f"https://docs.google.com/document/d/{doc_id}/edit#heading={heading_id}"
                 current_text = f"## {current_h2}\n"
@@ -201,24 +197,28 @@ def update_database(team_id: str = "company_A"):
             "model": EMBED_MODEL,
             "content": {"parts": [{"text": chunk}]}
         }
-        res = requests.post(EMBEDDING_API_URL, json=payload, headers={'Content-Type': 'application/json'})
+        res = call_gemini_with_retry(EMBEDDING_API_URL, payload)
         
-        if res.status_code == 200:
+        if res and res.status_code == 200:
             embeddings.append(res.json()['embedding']['values'])
             print(f"   Chunk {i+1}/{len(all_chunks)} embedded...")
         else:
-            print(f"❌ Error embedding chunk {i+1}: {res.text}")
+            print(f"❌ Error embedding chunk {i+1}: {res.text if res else 'Service Unavailable'}")
             
-        time.sleep(1) 
-    
+    if not embeddings:
+        print("⚠️ Koi valid vectors nahi mile, Pinecone update skip kar rahe hain.")
+        return updated_sections_info
+
     print("4. Updating Pinecone CLOUD Database...")
     pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
-    index_name = os.environ.get("PINECONE_INDEX_NAME", "docubot-gemini-index")
+    base_index = os.environ.get("PINECONE_INDEX_NAME", "docubot-index").lower()
+    vector_dim = len(embeddings[0])
+    
+    # 🔥 IMMUNE TO DIMENSION MISMATCH: Appends dimension to index name!
+    index_name = f"{base_index}-{vector_dim}"
     
     if index_name not in pc.list_indexes().names():
         print(f"☁️ Cloud par naya '{index_name}' index ban raha hai (Wait karo)...")
-        # 🔥 DYNAMIC DIMENSION SETTING! Jo size embedding ka hoga wahi index ka banega
-        vector_dim = len(embeddings[0]) if embeddings else 768
         pc.create_index(name=index_name, dimension=vector_dim, metric='cosine', spec=ServerlessSpec(cloud='aws', region='us-east-1'))
         while not pc.describe_index(index_name).status['ready']:
             time.sleep(1)
@@ -234,10 +234,6 @@ def update_database(team_id: str = "company_A"):
             "metadata": {"text": chunk, "workspace_id": team_id} 
         })
         
-    if not vectors_to_upsert:
-        print("⚠️ Koi valid vectors nahi mile, Pinecone update skip kar rahe hain.")
-        return updated_sections_info
-
     index.upsert(vectors=vectors_to_upsert, namespace=namespace)
     print(f"✅ BINGO! Google Doc ka sara gyaan Pinecone mein secure hai.\n")
     

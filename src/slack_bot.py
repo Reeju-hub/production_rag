@@ -1,5 +1,6 @@
 import os
 import re
+import time
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from pydantic import BaseModel
@@ -15,7 +16,6 @@ load_dotenv(dotenv_path=env_path)
 
 app = FastAPI(title="DocuBot.ai Enterprise Multi-Tenant Backend")
 
-# Initialize Clients
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
@@ -24,33 +24,26 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# 🔥 DYNAMIC MODEL AUTO-DISCOVERY
+# 🔥 ULTIMATE AUTO-DISCOVERY (Never gives 404)
 def get_working_models():
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     try:
         data = requests.get(url, timeout=10).json()
-        chat_model = "models/gemini-3.8-flash"
-        embed_model = "models/text-embedding-004"
-        if 'models' in data:
-            valid_embeds = [m['name'] for m in data['models'] if 'embedContent' in m.get('supportedGenerationMethods', [])]
-            if valid_embeds:
-                embed_model = next((m for m in valid_embeds if '004' in m), valid_embeds[0])
-            
-            valid_chats = [m['name'] for m in data['models'] if 'generateContent' in m.get('supportedGenerationMethods', []) and 'gemini' in m['name']]
-            if valid_chats:
-                chat_model = next((m for m in valid_chats if '3.8-flash' in m), valid_chats[0])
+        valid_embeds = [m['name'] for m in data.get('models', []) if 'embedContent' in m.get('supportedGenerationMethods', [])]
+        valid_chats = [m['name'] for m in data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', []) and 'gemini' in m['name']]
+        
+        embed_model = valid_embeds[0] if valid_embeds else "models/text-embedding-004"
+        chat_model = valid_chats[0] if valid_chats else "models/gemini-1.5-flash"
         return chat_model, embed_model
     except:
-        return "models/gemini-3.8-flash", "models/text-embedding-004"
+        return "models/gemini-1.5-flash", "models/text-embedding-004"
 
-# 🔥 PERMANENT STABLE OVERRIDE (For your specific API Key)
-CHAT_MODEL = "models/gemini-1.5-flash"
-EMBED_MODEL = "models/embedding-001"
+CHAT_MODEL, EMBED_MODEL = get_working_models()
 
 EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{EMBED_MODEL}:embedContent?key={GEMINI_API_KEY}"
 CHAT_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{CHAT_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
-INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-gemini-index")
+BASE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "docubot-index").lower()
 user_memory = {}
 
 class SlackEventPayload(BaseModel):
@@ -59,6 +52,21 @@ class SlackEventPayload(BaseModel):
     type: str
     event: dict = None
     team_id: str = None
+
+# 🔥 EXPONENTIAL RETRY WRAPPER (Never fails on 503)
+def call_gemini_with_retry(url, payload, max_retries=5):
+    headers = {'Content-Type': 'application/json'}
+    for attempt in range(max_retries):
+        res = requests.post(url, json=payload, headers=headers)
+        if res.status_code == 200:
+            return res
+        elif res.status_code == 503:
+            wait_time = 2 ** attempt
+            print(f"⚠️ Gemini 503 High Demand. Retrying attempt {attempt+2} in {wait_time}s...")
+            time.sleep(wait_time)
+        else:
+            return res
+    return None
 
 @app.post("/api/slack/events")
 async def slack_events(payload: SlackEventPayload):
@@ -93,7 +101,7 @@ async def slack_events(payload: SlackEventPayload):
                 headers={"Authorization": f"Bearer {bot_access_token}"},
                 json={
                     "channel": channel_id,
-                    "text": f"🔍 Searching your secure Google Drive documents for: '{user_question}'..."
+                    "text": f"🔍 Searching secure documents..."
                 }
             )
             init_data = init_res.json()
@@ -103,19 +111,21 @@ async def slack_events(payload: SlackEventPayload):
             message_ts = init_data["ts"]
 
             try:
-                index = pc.Index(INDEX_NAME)
-                
-                # 🔥 DYNAMIC MODEL PAYLOAD
                 embed_payload = {
                     "model": EMBED_MODEL,
                     "content": {"parts": [{"text": user_question}]}
                 }
-                embed_res = requests.post(EMBEDDING_API_URL, json=embed_payload, headers={'Content-Type': 'application/json'})
+                embed_res = call_gemini_with_retry(EMBEDDING_API_URL, embed_payload)
                 
-                if embed_res.status_code != 200:
-                    raise Exception(f"Embedding API Error: {embed_res.text}")
+                if not embed_res or embed_res.status_code != 200:
+                    raise Exception(f"Embedding API Error: {embed_res.text if embed_res else 'Service Unavailable'}")
                     
                 query_vector = embed_res.json()['embedding']['values']
+                vector_dim = len(query_vector)
+                
+                # 🔥 DYNAMIC INDEX MATCHING (Immune to dimension mismatches)
+                dynamic_index_name = f"{BASE_INDEX_NAME}-{vector_dim}"
+                index = pc.Index(dynamic_index_name)
 
                 namespace = f"workspace_{team_id}"
                 search_results = index.query(
@@ -134,13 +144,12 @@ async def slack_events(payload: SlackEventPayload):
                 chat_payload = {
                     "contents": [{"parts": [{"text": prompt}]}]
                 }
-                chat_res = requests.post(CHAT_API_URL, json=chat_payload, headers={'Content-Type': 'application/json'})
+                chat_res = call_gemini_with_retry(CHAT_API_URL, chat_payload)
                 
-                if chat_res.status_code != 200:
-                    raise Exception(f"Gemini API Error: {chat_res.text}")
+                if not chat_res or chat_res.status_code != 200:
+                    raise Exception(f"Gemini API Error: {chat_res.text if chat_res else 'Service Unavailable'}")
                     
                 final_answer = chat_res.json()['candidates'][0]['content']['parts'][0]['text']
-
                 citation_url = os.environ.get("GOOGLE_DOC_URL", "https://docs.google.com")
 
                 await client.post(
