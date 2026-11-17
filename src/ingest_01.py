@@ -17,12 +17,12 @@ from pinecone import Pinecone, ServerlessSpec
 load_dotenv()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# 🔥 DYNAMIC MODEL AUTO-DISCOVERY (Yeh Google se khud zinda models fetch karega)
+# 🔥 DYNAMIC MODEL AUTO-DISCOVERY (Updated to 3.8-flash as per Google's log)
 def get_working_models():
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     try:
         data = requests.get(url, timeout=10).json()
-        chat_model = "models/gemini-1.5-flash"
+        chat_model = "models/gemini-3.8-flash"
         embed_model = "models/text-embedding-004"
         if 'models' in data:
             valid_embeds = [m['name'] for m in data['models'] if 'embedContent' in m.get('supportedGenerationMethods', [])]
@@ -31,10 +31,10 @@ def get_working_models():
             
             valid_chats = [m['name'] for m in data['models'] if 'generateContent' in m.get('supportedGenerationMethods', []) and 'gemini' in m['name']]
             if valid_chats:
-                chat_model = next((m for m in valid_chats if 'flash' in m), valid_chats[0])
+                chat_model = next((m for m in valid_chats if '3.8-flash' in m), valid_chats[0])
         return chat_model, embed_model
     except:
-        return "models/gemini-1.5-flash", "models/text-embedding-004"
+        return "models/gemini-3.8-flash", "models/text-embedding-004"
 
 CHAT_MODEL, EMBED_MODEL = get_working_models()
 
@@ -195,7 +195,6 @@ def update_database(team_id: str = "company_A"):
     print("3. Generating embeddings via Google REST API (Zero RAM)...")
     embeddings = []
     for i, chunk in enumerate(all_chunks):
-        # 🔥 PAYLOAD BHI DYNAMIC HAI AB
         payload = {
             "model": EMBED_MODEL,
             "content": {"parts": [{"text": chunk}]}
@@ -216,7 +215,9 @@ def update_database(team_id: str = "company_A"):
     
     if index_name not in pc.list_indexes().names():
         print(f"☁️ Cloud par naya '{index_name}' index ban raha hai (Wait karo)...")
-        pc.create_index(name=index_name, dimension=768, metric='cosine', spec=ServerlessSpec(cloud='aws', region='us-east-1'))
+        # 🔥 DYNAMIC DIMENSION SETTING! Jo size embedding ka hoga wahi index ka banega
+        vector_dim = len(embeddings[0]) if embeddings else 768
+        pc.create_index(name=index_name, dimension=vector_dim, metric='cosine', spec=ServerlessSpec(cloud='aws', region='us-east-1'))
         while not pc.describe_index(index_name).status['ready']:
             time.sleep(1)
             
