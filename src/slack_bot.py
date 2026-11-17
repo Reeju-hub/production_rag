@@ -24,22 +24,16 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
-# 🔥 ENTERPRISE FAILOVER: Get ALL valid models instead of just one
+# 🔥 ENTERPRISE FAILOVER: Small guaranteed list to avoid 429 Rate Limits
 def get_working_models():
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-    try:
-        data = requests.get(url, timeout=10).json()
-        valid_embeds = [m['name'] for m in data.get('models', []) if 'embedContent' in m.get('supportedGenerationMethods', [])]
-        valid_chats = [m['name'] for m in data.get('models', []) if 'generateContent' in m.get('supportedGenerationMethods', []) and 'gemini' in m['name']]
-        
-        # Fallbacks just in case API acts completely weird
-        if not valid_embeds: valid_embeds = ["models/text-embedding-004"]
-        if not valid_chats: valid_chats = ["models/gemini-1.5-flash", "models/gemini-pro"]
-        
-        # Return ALL valid chat models as a list for our Waterfall
-        return valid_chats, valid_embeds[0]
-    except:
-        return ["models/gemini-1.5-flash", "models/gemini-pro"], "models/text-embedding-004"
+    # Hum API se sab kuch nahi mangenge warna 429 trigger hoga.
+    # Hum sidha Google ke sabse stable, purane aur high-limit models denge.
+    stable_chat_models = [
+        "models/gemini-1.5-flash", 
+        "models/gemini-1.5-pro",
+        "models/gemini-pro" # 1.0 version (almost never rate limits)
+    ]
+    return stable_chat_models, "models/embedding-001"
 
 ALL_CHAT_MODELS, EMBED_MODEL = get_working_models()
 EMBEDDING_API_URL = f"https://generativelanguage.googleapis.com/v1beta/{EMBED_MODEL}:embedContent?key={GEMINI_API_KEY}"
@@ -54,15 +48,16 @@ class SlackEventPayload(BaseModel):
     event: dict = None
     team_id: str = None
 
-def call_gemini_with_retry(url, payload, max_retries=2):
+# 🔥 EXPONENTIAL BACKOFF: Handles 429 and 503 smartly
+def call_gemini_with_retry(url, payload, max_retries=3):
     headers = {'Content-Type': 'application/json'}
     for attempt in range(max_retries):
         res = requests.post(url, json=payload, headers=headers)
         if res.status_code == 200:
             return res
         elif res.status_code in [503, 429]:
-            wait_time = 1
-            print(f"⚠️ Model Overloaded ({res.status_code}). Quick retry...")
+            wait_time = 2 ** attempt 
+            print(f"⚠️ Model Overloaded ({res.status_code}). Retrying in {wait_time}s...")
             time.sleep(wait_time)
         else:
             return res
@@ -124,7 +119,7 @@ async def slack_events(payload: SlackEventPayload):
                 query_vector = embed_res.json()['embedding']['values']
                 vector_dim = len(query_vector)
                 
-                # 2. Search Pinecone (With immune dimension matching)
+                # 2. Search Pinecone
                 dynamic_index_name = f"{BASE_INDEX_NAME}-{vector_dim}"
                 index = pc.Index(dynamic_index_name)
 
@@ -146,7 +141,6 @@ async def slack_events(payload: SlackEventPayload):
                 final_answer = None
                 last_error = "Service Unavailable"
                 
-                # Ek-ek karke saare models try karega jab tak answer na mil jaye!
                 for model_name in ALL_CHAT_MODELS:
                     print(f"🤖 Attempting answer with model: {model_name}...")
                     chat_url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={GEMINI_API_KEY}"
@@ -156,9 +150,9 @@ async def slack_events(payload: SlackEventPayload):
                     
                     if chat_res and chat_res.status_code == 200:
                         final_answer = chat_res.json()['candidates'][0]['content']['parts'][0]['text']
-                        break # Success! Loop ko tod do aur bahar niklo
+                        break 
                     else:
-                        last_error = chat_res.text if chat_res else "503 High Demand"
+                        last_error = chat_res.text if chat_res else "503/429 Error"
                         print(f"⚠️ Model {model_name} failed. Falling back to next available model...")
                         
                 if not final_answer:
